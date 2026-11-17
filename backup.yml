@@ -1,0 +1,129 @@
+version: 1
+
+settings:
+  log_level: info
+  log_file: /backup/backup.log
+  backup_directory: /backup
+  lock_file: /var/lock/backup-cli.lock
+
+  notifications:
+    enabled: true
+    slack_webhook_env: SLACK_WEBHOOK_URL
+
+  storage:
+    rclone_config: /root/.config/rclone/rclone.conf
+    remote: s3backup:backups/s001/backup
+    config_remote: s3backup:backups/s001/backup-configuration
+    upload_max_duration: 6h
+    config_max_duration: 12h
+
+profiles:
+  - name: authentik
+    type: postgres
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      container_name: authentik-postgresql-1
+      username: authentik
+      database: authentik
+    retention:
+      days: 14
+
+  - name: ghost
+    type: mysql
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      container_name: ghost-cms-db-1
+      username: root
+      database: ghost
+      password_env: GHOST_DB_PASSWORD
+    compression:
+      enabled: true
+      algorithm: gzip
+    retention:
+      days: 14
+
+  - name: jms
+    type: postgres
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      container_name: jms_postgresql
+      username: postgres
+      database: jumpserver
+    retention:
+      days: 14
+
+  - name: monitoring
+    type: postgres
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      container_name: monitoring-postgres-1
+      username: tempus_admin
+      database: tempus_security
+    retention:
+      days: 14
+
+  - name: n8n
+    type: postgres
+    enabled: true
+    schedule: "0 2 * * *"
+    source:
+      container_name: postgres-n8n
+      username: n8n
+      database: n8n
+    retention:
+      days: 14
+
+  - name: solidtime
+    type: postgres
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      container_name: solidtime-database-1
+      username: solidtime
+      database: solidtime
+    retention:
+      days: 14
+
+  - name: agent
+    type: postgres
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      container_name: ai-code-agent-postgres-1
+      username: agent
+      database: agent_platform
+    retention:
+      days: 14
+
+  - name: configs
+    type: restic
+    enabled: true
+    schedule: "0 0 * * *"
+    source:
+      restic_repository: /backup-configuration
+      restic_password_file: /root/.restic-password
+      tags:
+        - configs
+      pre_commands:
+        - "dpkg --get-selections > /root/backup-script/packages.list"
+        - "crontab -l > /root/backup-script/crontab-root.txt 2>/dev/null || true"
+      paths:
+        - /etc
+        - /root/backup-script
+        - /root/.qnap-credentials
+        - /var/spool/cron/crontabs
+        - /opt/authentik/traefik/
+        - /opt/authentik/.env
+      exclude:
+        - "*.part"
+    destination:
+      remote: s3backup:backups/s001/backup-configuration
+      remote_sync: true
+    retention:
+      daily: 7
+      weekly: 4
+      monthly: 12
