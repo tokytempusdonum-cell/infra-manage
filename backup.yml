@@ -4,6 +4,8 @@ settings:
   log_level: info
   log_file: /backup/backup.log
   backup_directory: /backup
+  # Base des verrous : un verrou par profil (ex: /var/lock/backup-cli.solidtime.lock).
+  # Profils différents = exécution en parallèle possible ; même profil = refusé s'il tourne déjà.
   lock_file: /var/lock/backup-cli.lock
 
   notifications:
@@ -127,3 +129,37 @@ profiles:
       daily: 7
       weekly: 4
       monthly: 12
+
+  # --- Exemples (décommenter et adapter) -----------------------------------
+  #
+  # MariaDB : utilise mariadb-dump (dump) et le client mariadb (restauration).
+  # Compression réelle des dumps MySQL/MariaDB : gzip par défaut (.sql.gz), zstd (.sql.zst)
+  # ou aucune (compression: { enabled: false } -> .sql). La restauration détecte le format seule.
+  # - name: shop
+  #   type: mariadb
+  #   enabled: true
+  #   schedule: "10 1 * * *"
+  #   source:
+  #     container_name: shop-db-1
+  #     username: root
+  #     database: shop
+  #     password_env: SHOP_DB_PASSWORD
+  #   compression: { enabled: true, algorithm: zstd }
+  #   retention:
+  #     days: 14
+  #
+  # MongoDB : mongodump --archive --gzip (archive .archive.gz) / mongorestore --drop.
+  # `database` est optionnel : omis = toutes les bases. `auth_database` vaut "admin" par défaut.
+  # Le mot de passe passe par la variable d'environnement (jamais dans les arguments).
+  # - name: app-mongo
+  #   type: mongo            # "mongodb" est accepté aussi
+  #   enabled: true
+  #   schedule: "20 1 * * *"
+  #   source:
+  #     container_name: app-mongo-1
+  #     username: root
+  #     password_env: MONGO_ROOT_PASSWORD
+  #     auth_database: admin
+  #     database: appdb
+  #   retention:
+  #     days: 14

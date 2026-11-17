@@ -97,6 +97,14 @@ impl<'a> RestoreAction<'a> {
                 let db_provider = DatabaseProvider::new(self.executor);
                 db_provider.restore_mysql(profile, &metadata.file_path, dest_db_override)
             }
+            ProfileType::Mariadb => {
+                let db_provider = DatabaseProvider::new(self.executor);
+                db_provider.restore_mariadb(profile, &metadata.file_path, dest_db_override)
+            }
+            ProfileType::Mongo => {
+                let db_provider = DatabaseProvider::new(self.executor);
+                db_provider.restore_mongo(profile, &metadata.file_path, dest_db_override)
+            }
             ProfileType::Filesystem => {
                 let default_target = profile
                     .source

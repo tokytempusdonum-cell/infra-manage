@@ -37,7 +37,8 @@ pub struct GlobalSettings {
     #[serde(default = "default_backup_directory")]
     pub backup_directory: PathBuf,
 
-    /// Chemin du fichier de verrou global pour prévenir les exécutions concurrentes.
+    /// Chemin de base des fichiers de verrou : un verrou par profil est dérivé de ce chemin
+    /// (ex: `/var/lock/backup-cli.lock` -> `/var/lock/backup-cli.solidtime.lock`).
     #[serde(default = "default_lock_file")]
     pub lock_file: PathBuf,
 
@@ -120,7 +121,7 @@ pub struct BackupProfile {
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Type de sauvegarde (Postgres, Mysql, Filesystem, Restic).
+    /// Type de sauvegarde (Postgres, Mysql, Mariadb, Mongo, Filesystem, Restic).
     #[serde(rename = "type")]
     pub profile_type: ProfileType,
 
@@ -154,8 +155,13 @@ fn default_true() -> bool {
 pub enum ProfileType {
     /// Base de données PostgreSQL (pg_dump -Fc).
     Postgres,
-    /// Base de données MySQL ou MariaDB (mysqldump).
+    /// Base de données MySQL (mysqldump / mysql).
     Mysql,
+    /// Base de données MariaDB (mariadb-dump / mariadb).
+    Mariadb,
+    /// Base de données MongoDB (mongodump / mongorestore, archive gzip).
+    #[serde(alias = "mongodb")]
+    Mongo,
     /// Arborescence de fichiers système (tar).
     Filesystem,
     /// Dépôt de sauvegarde incrémentale dédupliquée Restic.
@@ -177,8 +183,11 @@ pub struct SourceConfig {
     /// Utilisateur de connexion à la base de données.
     pub username: Option<String>,
 
-    /// Nom de la base de données à sauvegarder.
+    /// Nom de la base de données à sauvegarder (MongoDB : toutes les bases si omis).
     pub database: Option<String>,
+
+    /// Base d'authentification MongoDB (`--authenticationDatabase`, "admin" par défaut).
+    pub auth_database: Option<String>,
 
     /// Nom de la variable d'environnement contenant le mot de passe.
     pub password_env: Option<String>,
@@ -434,24 +443,52 @@ impl AppConfig {
                     )));
                 }
             }
-            ProfileType::Mysql => {
+            ProfileType::Mysql | ProfileType::Mariadb => {
+                let label = if profile.profile_type == ProfileType::Mariadb {
+                    "MariaDB"
+                } else {
+                    "MySQL"
+                };
                 if src.container_name.is_none() && src.host.is_none() {
                     return Err(DomainError::Config(format!(
-                        "Profil MySQL '{}' : spécifier 'container_name' ou 'host'",
-                        profile.name
+                        "Profil {} '{}' : spécifier 'container_name' ou 'host'",
+                        label, profile.name
                     )));
                 }
                 if src.username.is_none() {
                     return Err(DomainError::Config(format!(
-                        "Profil MySQL '{}' : 'username' requis",
-                        profile.name
+                        "Profil {} '{}' : 'username' requis",
+                        label, profile.name
                     )));
                 }
                 if src.database.is_none() {
                     return Err(DomainError::Config(format!(
-                        "Profil MySQL '{}' : 'database' requis",
+                        "Profil {} '{}' : 'database' requis",
+                        label, profile.name
+                    )));
+                }
+            }
+            ProfileType::Mongo => {
+                if src.container_name.is_none() && src.host.is_none() {
+                    return Err(DomainError::Config(format!(
+                        "Profil MongoDB '{}' : spécifier 'container_name' ou 'host'",
                         profile.name
                     )));
+                }
+                let has_password = src.password_env.is_some() || src.password_file.is_some();
+                if has_password && src.username.is_none() {
+                    return Err(DomainError::Config(format!(
+                        "Profil MongoDB '{}' : 'username' requis lorsqu'un mot de passe est fourni",
+                        profile.name
+                    )));
+                }
+                if let Some(c) = &profile.compression {
+                    if c.enabled && c.algorithm == CompressionAlgorithm::Zstd {
+                        return Err(DomainError::Config(format!(
+                            "Profil MongoDB '{}' : mongodump ne supporte que la compression gzip",
+                            profile.name
+                        )));
+                    }
                 }
             }
             ProfileType::Filesystem => {
@@ -505,6 +542,28 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Chemin du fichier de verrou propre à un profil.
+    ///
+    /// Empêche deux exécutions simultanées du même profil tout en autorisant
+    /// l'exécution en parallèle de profils différents.
+    pub fn profile_lock_path(&self, profile: &BackupProfile) -> PathBuf {
+        let base = &self.settings.lock_file;
+        let safe_name: String = profile
+            .name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let stem = base
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "backup-cli".to_string());
+        let ext = base
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| "lock".to_string());
+        base.with_file_name(format!("{}.{}.{}", stem, safe_name, ext))
+    }
+
     /// Récupère le dossier effectif de sauvegarde pour un profil donné.
     pub fn resolve_backup_dir<'a>(&'a self, profile: &'a BackupProfile) -> &'a Path {
         if let Some(dest_path) = &profile.destination.path {
@@ -512,5 +571,30 @@ impl AppConfig {
         } else {
             self.settings.backup_directory.as_path()
         }
+    }
+}
+
+impl BackupProfile {
+    /// Algorithme de compression appliqué aux dumps MySQL / MariaDB.
+    ///
+    /// - `compression` absent : gzip (comportement historique du nommage `.sql.gz`)
+    /// - `enabled: false` : aucune compression
+    /// - `enabled: true` sans `algorithm` (ou `none`) : gzip
+    pub fn sql_compression(&self) -> CompressionAlgorithm {
+        match &self.compression {
+            None => CompressionAlgorithm::Gzip,
+            Some(c) if !c.enabled => CompressionAlgorithm::None,
+            Some(c) => match c.algorithm {
+                CompressionAlgorithm::None => CompressionAlgorithm::Gzip,
+                other => other,
+            },
+        }
+    }
+
+    /// Indique si l'archive MongoDB est compressée en gzip (`mongodump --gzip`).
+    ///
+    /// Activé par défaut ; désactivé uniquement par `compression: { enabled: false }`.
+    pub fn mongo_uses_gzip(&self) -> bool {
+        self.compression.as_ref().map(|c| c.enabled).unwrap_or(true)
     }
 }

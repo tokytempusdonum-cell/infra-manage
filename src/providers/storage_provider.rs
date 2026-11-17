@@ -9,6 +9,7 @@ use tracing::{debug, info};
 use crate::core::abstract_traits::{CommandExecutor, StorageEngine};
 use crate::core::exceptions::{DomainError, DomainResult};
 use crate::core::model::{BackupMetadata, BackupStatus, CompressionAlgorithm, ProfileType};
+use super::index_lock::{with_index_lock, INDEX_LOCK_FILENAME};
 
 /// Nom conventionnel du fichier d'index des métadonnées de sauvegarde.
 pub const MANIFEST_FILENAME: &str = "manifest.json";
@@ -65,16 +66,18 @@ impl<'a> StorageEngine for DiskStorageEngine<'a> {
             ))
         })?;
 
-        let mut list = self.load_manifest(base_dir)?;
+        with_index_lock(base_dir, || {
+            let mut list = self.load_manifest(base_dir)?;
 
-        // Remplacement ou ajout
-        if let Some(pos) = list.iter().position(|m| m.id == metadata.id) {
-            list[pos] = metadata.clone();
-        } else {
-            list.push(metadata.clone());
-        }
+            // Remplacement ou ajout
+            if let Some(pos) = list.iter().position(|m| m.id == metadata.id) {
+                list[pos] = metadata.clone();
+            } else {
+                list.push(metadata.clone());
+            }
 
-        self.write_manifest(base_dir, &list)?;
+            self.write_manifest(base_dir, &list)
+        })?;
 
         // Écriture du fichier compagnon .sha256 à côté de l'archive (standard Unix)
         let sha_path = PathBuf::from(format!("{}.sha256", metadata.file_path.display()));
@@ -112,6 +115,7 @@ impl<'a> StorageEngine for DiskStorageEngine<'a> {
                     if file_name.ends_with(".part")
                         || file_name.ends_with(".sha256")
                         || file_name == MANIFEST_FILENAME
+                        || file_name == INDEX_LOCK_FILENAME
                     {
                         continue;
                     }
@@ -143,6 +147,8 @@ impl<'a> StorageEngine for DiskStorageEngine<'a> {
 
                         let guessed_type = if file_name.ends_with(".dump") {
                             ProfileType::Postgres
+                        } else if file_name.ends_with(".archive.gz") || file_name.ends_with(".archive") {
+                            ProfileType::Mongo
                         } else if file_name.contains(".sql") {
                             ProfileType::Mysql
                         } else {
@@ -206,11 +212,11 @@ impl<'a> StorageEngine for DiskStorageEngine<'a> {
             let _ = fs::remove_file(sha_path);
         }
 
-        let mut list = self.load_manifest(base_dir)?;
-        list.retain(|m| m.id != metadata.id);
-        self.write_manifest(base_dir, &list)?;
-
-        Ok(())
+        with_index_lock(base_dir, || {
+            let mut list = self.load_manifest(base_dir)?;
+            list.retain(|m| m.id != metadata.id);
+            self.write_manifest(base_dir, &list)
+        })
     }
 
     fn upload_to_remote(

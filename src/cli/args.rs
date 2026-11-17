@@ -136,7 +136,7 @@ pub enum RestoreSubcommands {
         #[arg(short, long)]
         target: Option<PathBuf>,
 
-        /// Nom de la base de données de destination (pour profil Postgres/MySQL).
+        /// Nom de la base de données de destination (pour profil Postgres/MySQL/MariaDB/MongoDB).
         #[arg(long)]
         dest_db: Option<String>,
 

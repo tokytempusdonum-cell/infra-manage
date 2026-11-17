@@ -8,6 +8,7 @@ use tracing::debug;
 
 use crate::core::exceptions::DomainResult;
 use crate::core::model::HistoryEntry;
+use crate::providers::index_lock::with_index_lock;
 
 /// Nom du fichier d'historique persistant.
 pub const HISTORY_FILENAME: &str = "history.json";
@@ -25,32 +26,35 @@ impl HistoryAction {
         status: &str,
         details: &str,
     ) -> DomainResult<()> {
-        let _ = fs::create_dir_all(base_dir);
-        let history_path = base_dir.join(HISTORY_FILENAME);
+        with_index_lock(base_dir, || {
+            let history_path = base_dir.join(HISTORY_FILENAME);
 
-        let mut list = Self::list(base_dir).unwrap_or_default();
+            let mut list = Self::list(base_dir).unwrap_or_default();
 
-        let entry = HistoryEntry {
-            timestamp: Utc::now(),
-            operation: operation.to_string(),
-            profile: profile.map(|s| s.to_string()),
-            backup_id: backup_id.map(|s| s.to_string()),
-            status: status.to_string(),
-            details: details.to_string(),
-        };
+            let entry = HistoryEntry {
+                timestamp: Utc::now(),
+                operation: operation.to_string(),
+                profile: profile.map(|s| s.to_string()),
+                backup_id: backup_id.map(|s| s.to_string()),
+                status: status.to_string(),
+                details: details.to_string(),
+            };
 
-        list.push(entry);
+            list.push(entry);
 
-        // Limite de taille de l'historique (dernières 1000 entrées)
-        if list.len() > 1000 {
-            list.drain(0..(list.len() - 1000));
-        }
+            // Limite de taille de l'historique (dernières 1000 entrées)
+            if list.len() > 1000 {
+                list.drain(0..(list.len() - 1000));
+            }
 
-        let temp_path = base_dir.join(format!("{}.part", HISTORY_FILENAME));
-        let file = File::create(&temp_path)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, &list)?;
-        fs::rename(temp_path, history_path)?;
+            let temp_path = base_dir.join(format!("{}.part", HISTORY_FILENAME));
+            let file = File::create(&temp_path)?;
+            let writer = BufWriter::new(file);
+            serde_json::to_writer_pretty(writer, &list)?;
+            fs::rename(temp_path, history_path)?;
+
+            Ok(())
+        })?;
 
         debug!(
             "[LOG HISTORY] Opération '{}' enregistrée ({})",

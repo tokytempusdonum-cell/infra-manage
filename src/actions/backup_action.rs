@@ -17,6 +17,7 @@ use crate::providers::database_provider::DatabaseProvider;
 use crate::providers::docker_provider::DockerProvider;
 use crate::providers::filesystem_provider::FilesystemProvider;
 use crate::providers::restic_provider::ResticProvider;
+use crate::providers::stream_compression::compress_file;
 
 /// Action d'exécution d'un cycle de sauvegarde complet ou ciblé.
 pub struct BackupAction<'a> {
@@ -51,11 +52,6 @@ impl<'a> BackupAction<'a> {
     ) -> DomainResult<usize> {
         info!("[LOG ACTION] === Début du cycle de sauvegarde ===");
 
-        // 1. Acquisition du verrou global
-        let _guard = self
-            .lock_service
-            .acquire_lock(&config.settings.lock_file)?;
-
         let mut successful = 0;
         let mut failed = 0;
 
@@ -78,6 +74,25 @@ impl<'a> BackupAction<'a> {
 
         for profile in &profiles_to_run {
             info!("[LOG ACTION] Lancement du profil : '{}'", profile.name);
+
+            // Verrou propre au profil : un même profil ne peut pas tourner deux fois en même temps,
+            // mais des profils différents peuvent s'exécuter en parallèle (processus distincts).
+            let _profile_guard = if dry_run {
+                None
+            } else {
+                match self.lock_service.acquire_lock(&config.profile_lock_path(profile)) {
+                    Ok(guard) => Some(guard),
+                    Err(e) => {
+                        error!(
+                            "[LOG ACTION] ÉCHEC : Profil '{}' déjà en cours d'exécution : {}",
+                            profile.name, e
+                        );
+                        failed += 1;
+                        continue;
+                    }
+                }
+            };
+
             match self.execute_profile(config, profile, dry_run) {
                 Ok(()) => {
                     info!("[LOG ACTION] OK : Profil '{}' terminé avec succès", profile.name);
@@ -167,7 +182,23 @@ impl<'a> BackupAction<'a> {
         // 3. Détermination de l'extension et des chemins de fichiers
         let (extension, compression_algo) = match profile.profile_type {
             ProfileType::Postgres => ("dump", CompressionAlgorithm::None),
-            ProfileType::Mysql => ("sql.gz", CompressionAlgorithm::Gzip),
+            ProfileType::Mysql | ProfileType::Mariadb => {
+                let algo = profile.sql_compression();
+                let ext = match algo {
+                    CompressionAlgorithm::Gzip => "sql.gz",
+                    CompressionAlgorithm::Zstd => "sql.zst",
+                    CompressionAlgorithm::None => "sql",
+                };
+                (ext, algo)
+            }
+            // mongodump --archive --gzip produit nativement une archive gzip.
+            ProfileType::Mongo => {
+                if profile.mongo_uses_gzip() {
+                    ("archive.gz", CompressionAlgorithm::Gzip)
+                } else {
+                    ("archive", CompressionAlgorithm::None)
+                }
+            }
             ProfileType::Filesystem => {
                 let algo = profile
                     .compression
@@ -231,7 +262,28 @@ impl<'a> BackupAction<'a> {
 
         let res = match profile.profile_type {
             ProfileType::Postgres => db_provider.dump_postgres(profile, &tmp_path),
-            ProfileType::Mysql => db_provider.dump_mysql(profile, &tmp_path),
+            ProfileType::Mysql | ProfileType::Mariadb => {
+                let dump = |out: &std::path::Path| {
+                    if profile.profile_type == ProfileType::Mariadb {
+                        db_provider.dump_mariadb(profile, out)
+                    } else {
+                        db_provider.dump_mysql(profile, out)
+                    }
+                };
+                if compression_algo == CompressionAlgorithm::None {
+                    dump(&tmp_path)
+                } else {
+                    // Le dump est écrit en clair puis réellement compressé (gzip / zstd).
+                    let raw_path = base_dir.join(format!("{}.raw.part", file_name));
+                    let level = profile.compression.as_ref().and_then(|c| c.level);
+                    let result = dump(&raw_path).and_then(|_| {
+                        compress_file(&raw_path, &tmp_path, compression_algo, level)
+                    });
+                    let _ = fs::remove_file(&raw_path);
+                    result
+                }
+            }
+            ProfileType::Mongo => db_provider.dump_mongo(profile, &tmp_path),
             ProfileType::Filesystem => {
                 let paths = profile.source.paths.as_deref().unwrap_or(&[]);
                 let excludes = profile.source.exclude.as_deref().unwrap_or(&[]);
