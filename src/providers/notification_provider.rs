@@ -228,6 +228,10 @@ impl WebhookNotificationService {
 }
 
 impl NotificationService for WebhookNotificationService {
+    fn is_configured(&self) -> bool {
+        self.resolve_url().is_some()
+    }
+
     fn notify(&self, message: &str) -> DomainResult<()> {
         self.send(&json!({ "text": message }), message)
     }

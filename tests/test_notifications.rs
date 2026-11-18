@@ -186,9 +186,12 @@ fn test_unreachable_webhook_error_does_not_leak_url() {
 #[test]
 fn test_disabled_or_missing_webhook_is_silent() {
     let svc = WebhookNotificationService::new(None);
+    assert!(!svc.is_configured());
     assert!(svc.notify("x").is_ok());
     let off = NotificationConfig { enabled: false, slack_webhook_url: Some("http://127.0.0.1:1/x".into()), slack_webhook_env: None };
-    assert!(WebhookNotificationService::new(Some(off)).notify("x").is_ok());
+    let off_svc = WebhookNotificationService::new(Some(off));
+    assert!(!off_svc.is_configured());
+    assert!(off_svc.notify("x").is_ok());
 }
 
 #[test]

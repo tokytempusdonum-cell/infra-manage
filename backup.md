@@ -1,11 +1,21 @@
 Voici comment sauvegarder, en pratique. Les commandes ci-dessous ont été essayées sur une configuration de test, avec les vrais `restic` et `rclone`, sur un S3 simulé par un dossier local.
 
+**Installer la dernière release**
+
+```bash
+curl -fL -O https://github.com/tokytempusdonum-cell/backup-cli/releases/latest/download/infra-manage-x86_64-unknown-linux-gnu.tar.gz
+curl -fL -O https://github.com/tokytempusdonum-cell/backup-cli/releases/latest/download/infra-manage-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c infra-manage-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf infra-manage-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 infra-manage-v*-x86_64-unknown-linux-gnu/infra-manage /usr/local/bin/infra-manage
+```
+
 **1. Avant la première sauvegarde**
 
 - Installe `infra-manage`, `rclone`, `restic` et `docker` sur le serveur.
 - Prépare ton fichier de configuration, par exemple `/root/backup-script/backup.yml`.
 - Vérifie que la config rclone existe (`rclone_config`) et que le fichier du mot de passe restic existe (`restic_password_file`).
-- Exporte les variables des mots de passe de bases (`GHOST_DB_PASSWORD`, etc.), celles que tu as mises dans `password_env`.
+- Mets les variables des mots de passe de bases (`GHOST_DB_PASSWORD`, etc.) et du webhook dans un fichier `.env` placé **dans le même dossier que `backup.yml`**. Il est chargé automatiquement. Les variables déjà définies dans le shell restent prioritaires.
 - Dans le profil `configs`, mets bien `destination.path: /backup-configuration`. Sans cette ligne, le dépôt restic n'est jamais envoyé sur S3.
 
 **2. Définir quoi sauvegarder (dans backup.yml)**
@@ -40,6 +50,16 @@ rclone lsf s3backup:backups/s001/backup-configuration
 
 - `backup verify` contrôle l'intégrité et la somme SHA-256 d'une sauvegarde.
 - Les deux `rclone lsf` montrent ce qui est réellement arrivé sur S3. Tu dois y voir un fichier par profil, plus le dépôt restic dans le dossier `backup-configuration`.
+
+**Tester les notifications**
+
+```
+# SLACK_WEBHOOK_URL peut être défini dans /root/backup-script/.env
+infra-manage -c /root/backup-script/backup.yml notify test
+infra-manage -c /root/backup-script/backup.yml notify test --message "Message personnalisé"
+```
+
+La commande échoue si `settings.notifications.enabled` vaut `false` ou si aucun webhook n'est configuré.
 
 **5. Automatiser**
 

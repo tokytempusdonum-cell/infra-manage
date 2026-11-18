@@ -36,6 +36,9 @@ pub enum Commands {
 
     /// Planification et génération des entrées crontab.
     Scheduler(SchedulerCommandGroup),
+
+    /// Envoi et test des notifications.
+    Notify(NotifyCommandGroup),
 }
 
 /// Groupe de commandes pour `config`.
@@ -253,5 +256,22 @@ pub enum SchedulerSubcommands {
         /// Chemin absolu du binaire infra-manage utilisé dans la crontab.
         #[arg(long)]
         binary_path: Option<String>,
+    },
+}
+
+/// Groupe de sous-commandes pour `notify`.
+#[derive(Debug, Args)]
+pub struct NotifyCommandGroup {
+    #[command(subcommand)]
+    pub command: NotifySubcommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NotifySubcommands {
+    /// Envoie une notification de test via le webhook configuré.
+    Test {
+        /// Message à envoyer.
+        #[arg(short, long, default_value = "Test de notification infra-manage")]
+        message: String,
     },
 }

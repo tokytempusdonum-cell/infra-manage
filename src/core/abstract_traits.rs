@@ -103,6 +103,11 @@ pub trait StorageEngine: Send + Sync {
 
 /// Port d'émission de notifications (Slack / webhook).
 pub trait NotificationService: Send + Sync {
+    /// Indique si au moins un canal de notification est actif et configuré.
+    fn is_configured(&self) -> bool {
+        true
+    }
+
     /// Émet un message de notification à destination des canaux configurés.
     fn notify(&self, message: &str) -> DomainResult<()>;
 

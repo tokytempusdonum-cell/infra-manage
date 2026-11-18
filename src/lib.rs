@@ -6,9 +6,11 @@
 //! - `actions` : cas d'usage d'orchestration métier.
 //! - `cli` : interface en ligne de commande.
 //! - `logging` : journalisation centralisée.
+//! - `env_loader` : chargement du `.env` situé à côté de la configuration.
 
 pub mod actions;
 pub mod cli;
 pub mod core;
+pub mod env_loader;
 pub mod logging;
 pub mod providers;

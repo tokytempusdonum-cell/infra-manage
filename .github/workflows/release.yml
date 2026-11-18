@@ -1,0 +1,87 @@
+name: Build and publish release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Read version and build tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$version" ]; then
+            echo "Impossible de lire la version depuis Cargo.toml" >&2
+            exit 1
+          fi
+          tag="v${version}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          directory="infra-manage-v${version}-x86_64-unknown-linux-gnu"
+          asset="infra-manage-x86_64-unknown-linux-gnu"
+
+          mkdir -p "dist/${directory}"
+          cp target/release/infra-manage "dist/${directory}/"
+          cp backup.yml .env.example backup.md restore.md "dist/${directory}/"
+
+          {
+            echo "infra-manage ${version}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Build: ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+            echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "dist/${directory}/RELEASE.txt"
+
+          tar -C dist -czf "dist/${asset}.tar.gz" "${directory}"
+          sha256sum "dist/${asset}.tar.gz" | sed 's#  dist/#  #' > "dist/${asset}.tar.gz.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-manage-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            dist/infra-manage-x86_64-unknown-linux-gnu.tar.gz \
+            dist/infra-manage-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "infra-manage ${{ steps.meta.outputs.version }} (${GITHUB_SHA::7})" \
+            --notes "Build automatique de \`${GITHUB_SHA::7}\` depuis la branche \`main\`." \
+            --latest

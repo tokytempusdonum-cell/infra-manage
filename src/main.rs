@@ -2,11 +2,12 @@
 
 use std::process;
 use clap::Parser;
-use tracing::error;
+use tracing::{error, warn};
 
 use backup_cli::cli::args::Cli;
 use backup_cli::cli::dispatcher::CommandDispatcher;
 use backup_cli::core::model::AppConfig;
+use backup_cli::env_loader;
 use backup_cli::logging::init_logging;
 use backup_cli::providers::command_executor::SystemCommandExecutor;
 use backup_cli::providers::lock_provider::SystemLockService;
@@ -15,6 +16,11 @@ use backup_cli::providers::storage_provider::DiskStorageEngine;
 
 fn main() {
     let cli = Cli::parse();
+
+    // Charge le .env du dossier de la configuration avant toute lecture de variables.
+    let dotenv_error = env_loader::load_dotenv_for_config(&cli.config)
+        .err()
+        .map(|error| error.to_string());
 
     // Lecture optionnelle de la configuration pour configurer la journalisation
     let (log_level, log_file, notif_cfg) = if cli.config.exists() {
@@ -36,6 +42,10 @@ fn main() {
     };
 
     init_logging(&log_level, log_file.as_deref());
+
+    if let Some(error) = dotenv_error {
+        warn!("[LOG MAIN] Impossible de charger le fichier .env : {}", error);
+    }
 
     let executor = SystemCommandExecutor::new();
     let storage = DiskStorageEngine::new(&executor);

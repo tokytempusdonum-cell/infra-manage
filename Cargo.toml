@@ -31,6 +31,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ureq = { version = "2.10", features = ["json", "tls"] }
+dotenvy = "0.15"
 
 [dev-dependencies]
 tempfile = "3.14"

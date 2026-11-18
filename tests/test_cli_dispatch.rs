@@ -6,7 +6,8 @@ use common::TestEnvironment;
 use backup_cli::core::abstract_traits::StorageEngine;
 use backup_cli::cli::args::{
     BackupCommandGroup, BackupSubcommands, Commands, ConfigArgs, ConfigSubcommands,
-    HistoryArgs, SchedulerCommandGroup, SchedulerSubcommands,
+    HistoryArgs, NotifyCommandGroup, NotifySubcommands, SchedulerCommandGroup,
+    SchedulerSubcommands,
 };
 use backup_cli::cli::dispatcher::CommandDispatcher;
 
@@ -141,4 +142,30 @@ fn test_cli_dispatch_scheduler_crontab() {
     dispatcher
         .dispatch(cmd_cron, &env.config_file)
         .expect("scheduler crontab a échoué");
+}
+
+#[test]
+fn test_cli_dispatch_notify_test() {
+    let env = TestEnvironment::new();
+    let config = env.build_sample_config();
+    env.write_config_yaml(&config);
+
+    let storage = env.storage();
+    let dispatcher = CommandDispatcher::new(
+        &env.executor,
+        &storage,
+        &env.lock_service,
+        &env.notifier,
+    );
+
+    let cmd_notify = Commands::Notify(NotifyCommandGroup {
+        command: NotifySubcommands::Test {
+            message: "Message de test".to_string(),
+        },
+    });
+    dispatcher
+        .dispatch(cmd_notify, &env.config_file)
+        .expect("notify test a échoué");
+
+    assert_eq!(env.notifier.get_messages(), vec!["Message de test".to_string()]);
 }

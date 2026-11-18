@@ -10,7 +10,7 @@ use crate::actions::scheduler_action::SchedulerAction;
 use crate::actions::server_restore_action::{parse_before, ServerRestoreAction, ServerRestoreOptions};
 use crate::actions::validation_action::{ValidateConfigAction, VerifyBackupAction};
 use crate::cli::args::{
-    BackupSubcommands, Commands, ConfigSubcommands, RestoreSubcommands,
+    BackupSubcommands, Commands, ConfigSubcommands, NotifySubcommands, RestoreSubcommands,
     RetentionSubcommands, SchedulerSubcommands,
 };
 use crate::core::abstract_traits::{CommandExecutor, LockService, NotificationService, StorageEngine};
@@ -300,6 +300,20 @@ impl<'a> CommandDispatcher<'a> {
                         binary_path.as_deref(),
                     )?;
                     println!("{}", crontab);
+                    Ok(())
+                }
+            },
+            Commands::Notify(args) => match args.command {
+                NotifySubcommands::Test { message } => {
+                    if !self.notifier.is_configured() {
+                        return Err(DomainError::Notification(
+                            "notifications désactivées ou webhook non configuré \
+                             (vérifie settings.notifications dans la configuration)"
+                                .to_string(),
+                        ));
+                    }
+                    self.notifier.notify(&message)?;
+                    println!("Notification de test envoyée : {}", message);
                     Ok(())
                 }
             },
