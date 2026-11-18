@@ -5,6 +5,7 @@ use common::TestEnvironment;
 
 use backup_cli::actions::backup_action::BackupAction;
 use backup_cli::core::abstract_traits::StorageEngine;
+use backup_cli::core::model::RemoteStorageConfig;
 
 #[test]
 fn test_backup_postgres_nominal_flow() {
@@ -154,6 +155,52 @@ fn test_backup_pre_and_post_commands_executed() {
         .iter()
         .any(|c| c.command == "sh" && c.args.contains(&format!("touch {}", marker_str)));
     assert!(found_pre_cmd, "La pré-commande aurait dû être exécutée");
+}
+
+#[test]
+fn test_single_file_upload_does_not_receive_rclone_filters() {
+    let env = TestEnvironment::new();
+    let mut config = env.build_sample_config();
+    config.settings.storage = Some(RemoteStorageConfig {
+        rclone_config: Some("/root/.config/rclone/rclone.conf".into()),
+        remote: "s3backup:backups/s001/backup".into(),
+        config_remote: None,
+        upload_max_duration: "6h".into(),
+        config_max_duration: "12h".into(),
+        // Filtre volontairement présent dans les réglages globaux : il ne doit pas
+        // être transmis au `copyto` d'un fichier unique.
+        extra_args: Some(vec!["--exclude".into(), "/locks/**".into()]),
+        server_name: None,
+    });
+
+    let storage = env.storage();
+    let action = BackupAction::new(
+        &env.executor,
+        &storage,
+        &env.lock_service,
+        &env.notifier,
+    );
+
+    action
+        .execute(&config, Some("authentik"), false)
+        .expect("Échec sauvegarde postgres");
+
+    let calls = env.executor.get_calls();
+    let upload = calls
+        .iter()
+        .find(|c| c.command == "timeout" && c.args.iter().any(|a| a == "copyto"))
+        .expect("aucun envoi rclone copyto enregistré");
+
+    assert!(
+        !upload.args.iter().any(|a| a == "--exclude" || a == "/locks/**"),
+        "un filtre rclone a été transmis au copyto : {:?}",
+        upload.args
+    );
+    assert!(
+        upload.args.windows(2).any(|w| w[0] == "--config" && w[1] == "/root/.config/rclone/rclone.conf"),
+        "--config manquant dans : {:?}",
+        upload.args
+    );
 }
 
 #[test]

@@ -21,6 +21,21 @@ fn test_valid_configuration_parsing() {
 }
 
 #[test]
+fn test_destination_extra_args_are_parsed() {
+    let env = TestEnvironment::new();
+    let mut config = env.build_sample_config();
+    config.profiles[2].destination.extra_args =
+        Some(vec!["--exclude".to_string(), "/locks/**".to_string()]);
+    env.write_config_yaml(&config);
+
+    let parsed = ValidateConfigAction::execute(&env.config_file).expect("Validation échouée");
+    assert_eq!(
+        parsed.profiles[2].destination.extra_args.as_deref(),
+        Some(&["--exclude".to_string(), "/locks/**".to_string()][..])
+    );
+}
+
+#[test]
 fn test_missing_required_fields_fails_validation() {
     let env = TestEnvironment::new();
     let mut config = env.build_sample_config();

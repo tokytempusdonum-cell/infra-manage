@@ -289,12 +289,19 @@ impl<'a> BackupAction<'a> {
                     .map(|s| s.config_max_duration.as_str())
                     .unwrap_or("12h");
                 let is_sync = profile.destination.remote_sync.unwrap_or(true);
-                let extra = config
+                let mut extra = config
                     .settings
                     .storage
                     .as_ref()
                     .map(|s| s.rclone_args())
                     .unwrap_or_default();
+                // Les filtres propres au profil (ex: exclusion des verrous restic)
+                // ne s'appliquent qu'au `sync` récursif, jamais au `copyto`.
+                if is_sync {
+                    if let Some(profile_extra) = &profile.destination.extra_args {
+                        extra.extend(profile_extra.iter().cloned());
+                    }
+                }
                 self.storage
                     .upload_to_remote(base_dir, remote, is_sync, timeout, &extra)?;
             }
@@ -421,7 +428,9 @@ impl<'a> BackupAction<'a> {
 
             let remote_file = format!("{}/{}", remote_dest, file_name);
             let timeout = &storage_cfg.upload_max_duration;
-            let extra = storage_cfg.rclone_args();
+            // `copyto` porte sur un fichier unique : rclone interdit d'y ajouter des
+            // filtres (`--exclude`...). On ne transmet donc que les arguments de base.
+            let extra = storage_cfg.rclone_base_args();
 
             if let Err(e) = self
                 .storage

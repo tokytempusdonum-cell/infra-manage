@@ -610,7 +610,8 @@ impl<'a> ServerRestoreAction<'a> {
             if opts.dry_run {
                 return Ok((file, 0));
             }
-            let local = self.storage.download_file(&dir, &file, &work_dir.join(&profile.name), &cfg.upload_max_duration, extra)?;
+            // Téléchargement d'un fichier unique (`copyto`) : pas de filtres rclone.
+            let local = self.storage.download_file(&dir, &file, &work_dir.join(&profile.name), &cfg.upload_max_duration, &cfg.rclone_base_args())?;
             let algo = detect_compression(&local)?;
             // Les chemins sont stockés absolus (sans « / » initial) : extraction à la racine.
             let count = FilesystemProvider::new().extract_archive(&local, Path::new("/"), algo, None)?;
@@ -710,7 +711,8 @@ impl<'a> ServerRestoreAction<'a> {
                 }
             }
 
-            let local = self.storage.download_file(&dir, &file, &work_dir.join(&profile.name), &cfg.upload_max_duration, extra)?;
+            // Téléchargement d'un fichier unique (`copyto`) : pas de filtres rclone.
+            let local = self.storage.download_file(&dir, &file, &work_dir.join(&profile.name), &cfg.upload_max_duration, &cfg.rclone_base_args())?;
             let db = DatabaseProvider::new(self.executor);
             match profile.profile_type {
                 ProfileType::Postgres => db.restore_postgres(profile, &local, None)?,

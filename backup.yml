@@ -4,10 +4,11 @@ settings:
   log_level: info
   log_file: /backup/backup.log
   backup_directory: /backup
-  # Base des verrous : un verrou par profil (ex: /var/lock/backup-cli.solidtime.lock).
+  # Base des verrous : un verrou par profil (ex: /var/lock/infra-manage.solidtime.lock).
   # Profils différents = exécution en parallèle possible ; même profil = refusé s'il tourne déjà.
-  lock_file: /var/lock/backup-cli.lock
+  lock_file: /var/lock/infra-manage.lock
 
+  # SLACK_WEBHOOK_URL et les mots de passe sont lus dans le .env du même dossier que ce fichier.
   notifications:
     enabled: true
     slack_webhook_env: SLACK_WEBHOOK_URL
@@ -25,6 +26,9 @@ settings:
     # server_name: s001   # à renseigner seulement si la déduction ci-dessus est fausse
     upload_max_duration: 6h
     config_max_duration: 12h
+    # Ne pas mettre de filtres (--exclude/--include) ici : ils s'appliqueraient aussi
+    # au `copyto` des fichiers uniques, que rclone refuse. Utiliser `destination.extra_args`
+    # du profil restic pour exclure des éléments lors du `sync`.
 
 profiles:
   - name: authentik
@@ -157,6 +161,11 @@ profiles:
       path: /backup-configuration
       remote: s3backup:backups/s001/backup-configuration
       remote_sync: true
+      # Comme l'ancien main-backup.sh : ne pas envoyer les verrous du dépôt restic.
+      # Appliqué au `sync` récursif uniquement, jamais au `copyto` d'un dump.
+      extra_args:
+        - "--exclude"
+        - "/locks/**"
     retention:
       daily: 7
       weekly: 4

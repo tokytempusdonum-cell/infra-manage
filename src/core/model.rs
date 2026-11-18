@@ -117,14 +117,26 @@ pub struct RemoteStorageConfig {
 }
 
 impl RemoteStorageConfig {
-    /// Arguments à passer à chaque appel rclone : `--config <rclone_config>` (si renseigné)
-    /// suivi des `extra_args`.
-    pub fn rclone_args(&self) -> Vec<String> {
+    /// Arguments communs à tous les appels rclone : `--config <rclone_config>` (si renseigné).
+    ///
+    /// À utiliser pour les opérations sur un fichier unique (`copyto`), car rclone refuse
+    /// les filtres (`--exclude`, `--include`, ...) dans ce mode.
+    pub fn rclone_base_args(&self) -> Vec<String> {
         let mut args = Vec::new();
         if let Some(cfg) = &self.rclone_config {
             args.push("--config".to_string());
             args.push(cfg.to_string_lossy().to_string());
         }
+        args
+    }
+
+    /// Arguments à passer aux transferts récursifs (`sync`, `copy`, `lsf`) :
+    /// `--config <rclone_config>` suivi des `extra_args`.
+    ///
+    /// Les `extra_args` peuvent contenir des filtres (ex: `--exclude /locks/**`).
+    /// Ils ne doivent pas être transmis à un `copyto` de fichier unique.
+    pub fn rclone_args(&self) -> Vec<String> {
+        let mut args = self.rclone_base_args();
         if let Some(extra) = &self.extra_args {
             args.extend(extra.iter().cloned());
         }
@@ -271,6 +283,12 @@ pub struct DestinationConfig {
 
     /// Si vrai, synchronise (sync) au lieu de copier (copyto).
     pub remote_sync: Option<bool>,
+
+    /// Arguments supplémentaires rclone propres à ce profil, utilisés uniquement
+    /// pour un transfert récursif (`sync`). Permet par exemple d'exclure les
+    /// verrous d'un dépôt restic sans casser l'envoi des fichiers uniques
+    /// (`copyto`, qui refuse les filtres).
+    pub extra_args: Option<Vec<String>>,
 }
 
 /// Algorithmes de compression pris en charge.
