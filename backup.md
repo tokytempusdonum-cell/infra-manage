@@ -3,8 +3,8 @@ Voici comment sauvegarder, en pratique. Les commandes ci-dessous ont été essay
 **Installer la dernière release**
 
 ```bash
-curl -fL -O https://github.com/tokytempusdonum-cell/backup-cli/releases/latest/download/infra-manage-x86_64-unknown-linux-gnu.tar.gz
-curl -fL -O https://github.com/tokytempusdonum-cell/backup-cli/releases/latest/download/infra-manage-x86_64-unknown-linux-gnu.tar.gz.sha256
+curl -fL -O https://github.com/tokytempusdonum-cell/infra-manage/releases/latest/download/infra-manage-x86_64-unknown-linux-gnu.tar.gz
+curl -fL -O https://github.com/tokytempusdonum-cell/infra-manage/releases/latest/download/infra-manage-x86_64-unknown-linux-gnu.tar.gz.sha256
 sha256sum -c infra-manage-x86_64-unknown-linux-gnu.tar.gz.sha256
 tar -xzf infra-manage-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 0755 infra-manage-v*-x86_64-unknown-linux-gnu/infra-manage /usr/local/bin/infra-manage
