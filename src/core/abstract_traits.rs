@@ -4,9 +4,9 @@
 //! (exécuteur de commandes, moteur de stockage, notification, verrouillage)
 //! sans aucune dépendance envers les bibliothèques tierces d'implémentation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use super::exceptions::DomainResult;
-use super::model::BackupMetadata;
+use super::model::{BackupMetadata, BackupReport};
 
 /// Résultat d'exécution d'une commande système.
 #[derive(Debug, Clone)]
@@ -76,12 +76,42 @@ pub trait StorageEngine: Send + Sync {
         timeout: &str,
         extra_args: &[String],
     ) -> DomainResult<()>;
+
+    /// Liste les fichiers d'un dossier distant (rclone lsf), sans récursion.
+    fn list_remote_files(&self, remote_dir: &str, extra_args: &[String]) -> DomainResult<Vec<String>>;
+
+    /// Télécharge un fichier d'un dossier distant (rclone copyto) puis vérifie la copie
+    /// (rclone check). Retourne le chemin local du fichier téléchargé.
+    fn download_file(
+        &self,
+        remote_dir: &str,
+        file_name: &str,
+        local_dir: &Path,
+        timeout: &str,
+        extra_args: &[String],
+    ) -> DomainResult<PathBuf>;
+
+    /// Télécharge un dossier distant complet (rclone copy) puis vérifie la copie (rclone check).
+    fn download_dir(
+        &self,
+        remote_dir: &str,
+        local_dir: &Path,
+        timeout: &str,
+        extra_args: &[String],
+    ) -> DomainResult<()>;
 }
 
 /// Port d'émission de notifications (Slack / webhook).
 pub trait NotificationService: Send + Sync {
     /// Émet un message de notification à destination des canaux configurés.
     fn notify(&self, message: &str) -> DomainResult<()>;
+
+    /// Émet le bilan structuré d'un cycle de sauvegarde.
+    ///
+    /// Par défaut, envoie la version texte brut ; les canaux riches (Slack) la surchargent.
+    fn notify_report(&self, report: &BackupReport) -> DomainResult<()> {
+        self.notify(&report.to_plain_text())
+    }
 }
 
 /// Garde RAII garantissant la libération du verrou de concurrence à sa destruction.

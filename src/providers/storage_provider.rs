@@ -280,4 +280,137 @@ impl<'a> StorageEngine for DiskStorageEngine<'a> {
         info!("[LOG STORAGE] Envoi distant rclone terminé avec succès.");
         Ok(())
     }
+
+    fn list_remote_files(&self, remote_dir: &str, extra_args: &[String]) -> DomainResult<Vec<String>> {
+        let mut args = vec!["lsf", remote_dir, "--files-only"];
+        for extra in extra_args {
+            args.push(extra.as_str());
+        }
+        let output = self.executor.execute("rclone", &args, &[])?;
+        if !output.success {
+            return Err(DomainError::Storage(format!(
+                "Impossible de lister '{}' (rclone code {}) : {}",
+                remote_dir,
+                output.exit_code,
+                output.stderr.trim()
+            )));
+        }
+        Ok(output
+            .stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
+    fn download_file(
+        &self,
+        remote_dir: &str,
+        file_name: &str,
+        local_dir: &Path,
+        timeout: &str,
+        extra_args: &[String],
+    ) -> DomainResult<PathBuf> {
+        fs::create_dir_all(local_dir)?;
+        let remote_file = format!("{}/{}", remote_dir.trim_end_matches('/'), file_name);
+        let local_file = local_dir.join(file_name);
+        let local_str = local_file.to_string_lossy().to_string();
+        info!("[LOG STORAGE] Téléchargement rclone de '{}'", remote_file);
+
+        self.run_rclone_transfer("copyto", &remote_file, &local_str, timeout, extra_args)?;
+
+        // Vérification de la copie : le fichier doit exister et être identique à la source.
+        let local_dir_str = local_dir.to_string_lossy().to_string();
+        let include = format!("/{}", file_name);
+        self.run_rclone_check(remote_dir, &local_dir_str, Some(&include), extra_args)?;
+        Ok(local_file)
+    }
+
+    fn download_dir(
+        &self,
+        remote_dir: &str,
+        local_dir: &Path,
+        timeout: &str,
+        extra_args: &[String],
+    ) -> DomainResult<()> {
+        fs::create_dir_all(local_dir)?;
+        let local_str = local_dir.to_string_lossy().to_string();
+        info!("[LOG STORAGE] Téléchargement rclone du dossier '{}'", remote_dir);
+
+        self.run_rclone_transfer("copy", remote_dir, &local_str, timeout, extra_args)?;
+        self.run_rclone_check(remote_dir, &local_str, None, extra_args)
+    }
+}
+
+impl<'a> DiskStorageEngine<'a> {
+    /// Lance un transfert rclone (copy / copyto) encadré par `timeout`.
+    fn run_rclone_transfer(
+        &self,
+        mode: &str,
+        source: &str,
+        dest: &str,
+        timeout: &str,
+        extra_args: &[String],
+    ) -> DomainResult<()> {
+        let mut args = vec![
+            "-k",
+            "60",
+            timeout,
+            "rclone",
+            mode,
+            source,
+            dest,
+            "--contimeout",
+            "10s",
+            "--timeout",
+            "120s",
+            "--retries",
+            "3",
+            "--low-level-retries",
+            "10",
+        ];
+        for extra in extra_args {
+            args.push(extra.as_str());
+        }
+        let output = self.executor.execute("timeout", &args, &[])?;
+        if !output.success {
+            let msg = if output.exit_code == 124 {
+                format!("Dépassement du plafond de durée ({}) lors du téléchargement rclone", timeout)
+            } else {
+                format!("Échec du téléchargement rclone (code {}) : {}", output.exit_code, output.stderr.trim())
+            };
+            return Err(DomainError::Storage(msg));
+        }
+        Ok(())
+    }
+
+    /// Vérifie qu'une copie locale est identique à la source distante (rclone check).
+    fn run_rclone_check(
+        &self,
+        remote: &str,
+        local: &str,
+        include: Option<&str>,
+        extra_args: &[String],
+    ) -> DomainResult<()> {
+        let mut args = vec!["check", remote, local, "--one-way"];
+        if let Some(inc) = include {
+            args.push("--include");
+            args.push(inc);
+        }
+        for extra in extra_args {
+            args.push(extra.as_str());
+        }
+        let output = self.executor.execute("rclone", &args, &[])?;
+        if !output.success {
+            return Err(DomainError::Integrity {
+                resource: remote.to_string(),
+                message: format!(
+                    "La copie locale diffère de la source distante (rclone check code {}) : {}",
+                    output.exit_code,
+                    output.stderr.trim()
+                ),
+            });
+        }
+        Ok(())
+    }
 }

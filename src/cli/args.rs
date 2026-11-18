@@ -114,16 +114,64 @@ pub enum BackupSubcommands {
     },
 }
 
-/// Groupe de sous-commandes pour `restore`.
+/// Groupe de commandes pour `restore`.
+///
+/// Sans sous-commande, restaure des applications d'un serveur depuis S3 vers cette machine :
+/// `backup-cli restore --server s001 --application authentik` (ou `--application all`).
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct RestoreCommandGroup {
     #[command(subcommand)]
-    pub command: RestoreSubcommands,
+    pub command: Option<RestoreSubcommands>,
+
+    /// Serveur d'origine des sauvegardes sur S3 (ex: s001, s002).
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Application à restaurer : un nom, une liste « a,b » ou `all` (toutes).
+    #[arg(long, alias = "app")]
+    pub application: Option<String>,
+
+    /// Restaure l'état le plus récent antérieur à cette date UTC
+    /// (YYYY-MM-DD = fin de journée, YYYY-MM-DD_HH-MM-SS ou RFC 3339).
+    #[arg(long)]
+    pub before: Option<String>,
+
+    /// Simulation : affiche ce qui serait restauré sans rien télécharger ni modifier.
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+
+    /// Autorise l'écrasement d'une application déjà présente sur cette machine.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+
+    /// Lance `docker compose up -d` pour l'application avant de restaurer ses bases de données.
+    #[arg(long, default_value_t = false)]
+    pub start: bool,
+
+    /// Avec `--application all` : restaure aussi les fichiers système du snapshot (/etc, crontab...).
+    #[arg(long, default_value_t = false)]
+    pub include_system: bool,
+
+    /// Dossier de téléchargement temporaire (défaut : <backup_directory>/.restore-<serveur>).
+    #[arg(long)]
+    pub work_dir: Option<PathBuf>,
+
+    /// Conserve les fichiers téléchargés après la restauration.
+    #[arg(long, default_value_t = false)]
+    pub keep_downloads: bool,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum RestoreSubcommands {
-    /// Restaure une sauvegarde complète ou partielle.
+    /// Liste, pour un serveur, les applications et la dernière sauvegarde disponible sur S3.
+    List {
+        /// Serveur d'origine des sauvegardes (ex: s001).
+        #[arg(long)]
+        server: String,
+    },
+
+    /// Restaure une sauvegarde locale (complète ou partielle) identifiée par son ID.
     Run {
         /// Identifiant de la sauvegarde à restaurer.
         backup_id: String,

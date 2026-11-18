@@ -106,22 +106,29 @@ impl<'a> RestoreAction<'a> {
                 db_provider.restore_mongo(profile, &metadata.file_path, dest_db_override)
             }
             ProfileType::Filesystem => {
-                let default_target = profile
-                    .source
-                    .paths
-                    .as_ref()
-                    .and_then(|p| p.first())
-                    .cloned()
-                    .unwrap_or_else(|| PathBuf::from("/tmp/restore"));
+                // Les archives stockent les chemins absolus (sans « / » initial) : sans --target,
+                // elles sont extraites à la racine pour retrouver leur emplacement d'origine.
+                // L'anti-écrasement porte alors sur les chemins sauvegardés par le profil.
+                let (target_dir, guarded): (PathBuf, Vec<PathBuf>) = match target_override {
+                    Some(t) => (t.to_path_buf(), vec![t.to_path_buf()]),
+                    None => (
+                        PathBuf::from("/"),
+                        profile.source.paths.clone().unwrap_or_default(),
+                    ),
+                };
 
-                let target_dir = target_override.unwrap_or(&default_target);
-
-                // Sécurité anti-écrasement : si le dossier existe et n'est pas vide
-                if target_dir.exists() && !force {
-                    if let Ok(mut entries) = fs::read_dir(target_dir) {
-                        if entries.next().is_some() {
+                if !force {
+                    for guarded_path in &guarded {
+                        let non_empty = match fs::metadata(guarded_path) {
+                            Ok(m) if m.is_dir() => fs::read_dir(guarded_path)
+                                .map(|mut e| e.next().is_some())
+                                .unwrap_or(false),
+                            Ok(_) => true,
+                            Err(_) => false,
+                        };
+                        if non_empty {
                             return Err(DomainError::RestoreSafety {
-                                target: target_dir.display().to_string(),
+                                target: guarded_path.display().to_string(),
                             });
                         }
                     }
@@ -131,7 +138,7 @@ impl<'a> RestoreAction<'a> {
                 fs_provider
                     .extract_archive(
                         &metadata.file_path,
-                        target_dir,
+                        &target_dir,
                         metadata.compression,
                         partial_filter,
                     )

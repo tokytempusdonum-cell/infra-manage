@@ -47,6 +47,15 @@ pub struct GlobalSettings {
 
     /// Configuration optionnelle du stockage distant global (ex: rclone / S3).
     pub storage: Option<RemoteStorageConfig>,
+
+    /// Dossier racine des applications (ex: `/opt`) : l'application `authentik` y vit dans
+    /// `/opt/authentik`. Sert à restaurer la configuration (compose, .env) d'une application.
+    #[serde(default = "default_applications_root")]
+    pub applications_root: PathBuf,
+}
+
+fn default_applications_root() -> PathBuf {
+    PathBuf::from("/opt")
 }
 
 fn default_log_level() -> String {
@@ -101,6 +110,26 @@ pub struct RemoteStorageConfig {
 
     /// Arguments supplémentaires transmis à rclone.
     pub extra_args: Option<Vec<String>>,
+
+    /// Nom de CE serveur dans l'arborescence distante (ex: "s001"). Déduit par défaut de
+    /// `remote` selon la convention `<racine>/<serveur>/<dossier>`.
+    pub server_name: Option<String>,
+}
+
+impl RemoteStorageConfig {
+    /// Arguments à passer à chaque appel rclone : `--config <rclone_config>` (si renseigné)
+    /// suivi des `extra_args`.
+    pub fn rclone_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(cfg) = &self.rclone_config {
+            args.push("--config".to_string());
+            args.push(cfg.to_string_lossy().to_string());
+        }
+        if let Some(extra) = &self.extra_args {
+            args.extend(extra.iter().cloned());
+        }
+        args
+    }
 }
 
 fn default_upload_duration() -> String {
@@ -143,6 +172,14 @@ pub struct BackupProfile {
 
     /// Options de vérification d'intégrité.
     pub validation: Option<ValidationConfig>,
+
+    /// Application à laquelle appartient ce profil (défaut : le nom du profil).
+    ///
+    /// Plusieurs profils peuvent désigner la même application : sa base de données
+    /// (postgres, mysql, mariadb, mongo) et ses fichiers uploadés (filesystem).
+    /// `restore --application <nom>` les restaure ensemble.
+    #[serde(default)]
+    pub application: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -422,6 +459,27 @@ impl AppConfig {
     fn validate_profile(&self, profile: &BackupProfile) -> DomainResult<()> {
         let src = &profile.source;
 
+        if profile.profile_type != ProfileType::Restic {
+            let app = profile.application_name();
+            let valid_chars = app
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+            if let Some(explicit) = &profile.application {
+                if explicit.is_empty() || !valid_chars {
+                    return Err(DomainError::Config(format!(
+                        "Profil '{}' : 'application' invalide ('{}'), caractères autorisés : lettres, chiffres, - _ .",
+                        profile.name, explicit
+                    )));
+                }
+            }
+            if app.eq_ignore_ascii_case("all") {
+                return Err(DomainError::Config(format!(
+                    "Profil '{}' : le nom d'application 'all' est réservé (restore --application all)",
+                    profile.name
+                )));
+            }
+        }
+
         match profile.profile_type {
             ProfileType::Postgres => {
                 if src.container_name.is_none() && src.host.is_none() {
@@ -596,5 +654,287 @@ impl BackupProfile {
     /// Activé par défaut ; désactivé uniquement par `compression: { enabled: false }`.
     pub fn mongo_uses_gzip(&self) -> bool {
         self.compression.as_ref().map(|c| c.enabled).unwrap_or(true)
+    }
+}
+
+impl ProfileType {
+    /// Libellé court et stable du type de profil (affichage, notifications).
+    pub fn label(&self) -> &'static str {
+        match self {
+            ProfileType::Postgres => "postgres",
+            ProfileType::Mysql => "mysql",
+            ProfileType::Mariadb => "mariadb",
+            ProfileType::Mongo => "mongo",
+            ProfileType::Filesystem => "filesystem",
+            ProfileType::Restic => "restic",
+        }
+    }
+}
+
+/// Résultat d'un profil au sein d'un cycle de sauvegarde (utilisé par les notifications).
+#[derive(Debug, Clone)]
+pub struct ProfileReport {
+    /// Nom du profil.
+    pub name: String,
+    /// Type du profil.
+    pub profile_type: ProfileType,
+    /// `Success` ou `Failed`.
+    pub status: BackupStatus,
+    /// Taille du fichier produit, si connue.
+    pub size_bytes: Option<u64>,
+    /// Durée d'exécution du profil en secondes.
+    pub duration_seconds: f64,
+    /// Message d'erreur (échec) ou précision (ex: « snapshot restic créé »).
+    pub detail: Option<String>,
+}
+
+impl ProfileReport {
+    /// Vrai si le profil a réussi.
+    pub fn is_success(&self) -> bool {
+        self.status == BackupStatus::Success
+    }
+
+    /// Description courte du résultat, sans icône ni nom (ex: « 12,3 Mo en 4 s »).
+    pub fn summary(&self) -> String {
+        if self.is_success() {
+            let what = match (self.size_bytes, &self.detail) {
+                (Some(size), _) => format_size(size),
+                (None, Some(d)) => d.clone(),
+                (None, None) => "terminé".to_string(),
+            };
+            format!("{} en {}", what, format_duration(self.duration_seconds))
+        } else {
+            format!(
+                "échec : {}",
+                short_error(self.detail.as_deref().unwrap_or("erreur inconnue"))
+            )
+        }
+    }
+}
+
+/// Bilan complet d'un cycle de sauvegarde, destiné aux notifications.
+#[derive(Debug, Clone)]
+pub struct BackupReport {
+    /// Nom de la machine ayant exécuté les sauvegardes.
+    pub hostname: String,
+    /// Début du cycle (UTC).
+    pub started_at: DateTime<Utc>,
+    /// Durée totale du cycle en secondes.
+    pub duration_seconds: f64,
+    /// Résultat de chaque profil exécuté.
+    pub profiles: Vec<ProfileReport>,
+}
+
+impl BackupReport {
+    /// Nombre total de profils exécutés.
+    pub fn total(&self) -> usize {
+        self.profiles.len()
+    }
+
+    /// Nombre de profils sauvegardés avec succès.
+    pub fn succeeded(&self) -> usize {
+        self.profiles.iter().filter(|p| p.is_success()).count()
+    }
+
+    /// Nombre de profils en échec.
+    pub fn failed(&self) -> usize {
+        self.total() - self.succeeded()
+    }
+
+    /// Profils triés pour l'affichage : échecs d'abord, puis ordre d'exécution.
+    pub fn sorted_profiles(&self) -> Vec<&ProfileReport> {
+        let mut list: Vec<&ProfileReport> = self.profiles.iter().collect();
+        list.sort_by_key(|p| p.is_success());
+        list
+    }
+
+    /// Titre en une ligne : état global et décompte.
+    pub fn headline(&self) -> String {
+        let (ok, ko, total) = (self.succeeded(), self.failed(), self.total());
+        let profils = if total > 1 { "profils" } else { "profil" };
+        if ko == 0 {
+            format!(
+                "✅ Sauvegardes réussies — {}/{} {} sauvegardé{}",
+                ok,
+                total,
+                profils,
+                if total > 1 { "s" } else { "" }
+            )
+        } else if ok == 0 {
+            format!(
+                "🚨 Échec des sauvegardes — {} sur {} {} en échec, aucune réussie",
+                ko, total, profils
+            )
+        } else {
+            format!(
+                "⚠️ Sauvegardes partielles — {} réussie{}, {} échec{} sur {} profils",
+                ok,
+                if ok > 1 { "s" } else { "" },
+                ko,
+                if ko > 1 { "s" } else { "" },
+                total
+            )
+        }
+    }
+
+    /// Ligne de décompte : total, réussies, échecs, durée.
+    pub fn counts_line(&self) -> String {
+        format!(
+            "Total : {} · Réussies : {} · Échecs : {} · Durée : {}",
+            self.total(),
+            self.succeeded(),
+            self.failed(),
+            format_duration(self.duration_seconds)
+        )
+    }
+
+    /// Version texte brut complète (repli pour tout canal sans mise en forme riche).
+    pub fn to_plain_text(&self) -> String {
+        let mut lines = vec![
+            format!("{} (serveur {})", self.headline(), self.hostname),
+            self.counts_line(),
+        ];
+        for p in self.sorted_profiles() {
+            lines.push(format!(
+                "{} {} ({}) — {}",
+                if p.is_success() { "✅" } else { "❌" },
+                p.name,
+                p.profile_type.label(),
+                p.summary()
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+/// Formate une taille en octets de façon lisible (« 12,3 Mo »).
+pub fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["o", "Ko", "Mo", "Go", "To"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} o", bytes)
+    } else {
+        format!("{:.1} {}", value, UNITS[unit]).replace('.', ",")
+    }
+}
+
+/// Formate une durée en secondes (« 4 s », « 1 min 12 s », « 1 h 02 min »).
+pub fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0).round() as u64;
+    if total < 60 {
+        format!("{} s", total)
+    } else if total < 3600 {
+        format!("{} min {:02} s", total / 60, total % 60)
+    } else {
+        format!("{} h {:02} min", total / 3600, (total % 3600) / 60)
+    }
+}
+
+/// Réduit un message d'erreur à une ligne d'au plus 220 caractères.
+pub fn short_error(message: &str) -> String {
+    let flat = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 220 {
+        let cut: String = flat.chars().take(219).collect();
+        format!("{}…", cut)
+    } else {
+        flat
+    }
+}
+
+impl BackupProfile {
+    /// Nom de l'application de ce profil (champ `application`, sinon le nom du profil).
+    pub fn application_name(&self) -> &str {
+        self.application.as_deref().unwrap_or(&self.name)
+    }
+}
+
+impl AppConfig {
+    /// Regroupe les profils (hors restic) par application, triés par nom d'application.
+    pub fn applications(&self) -> std::collections::BTreeMap<String, Vec<&BackupProfile>> {
+        let mut map: std::collections::BTreeMap<String, Vec<&BackupProfile>> =
+            std::collections::BTreeMap::new();
+        for p in self
+            .profiles
+            .iter()
+            .filter(|p| p.profile_type != ProfileType::Restic)
+        {
+            map.entry(p.application_name().to_string()).or_default().push(p);
+        }
+        map
+    }
+
+    /// Profils restic : ils portent les fichiers de configuration des applications.
+    pub fn config_profiles(&self) -> Vec<&BackupProfile> {
+        self.profiles
+            .iter()
+            .filter(|p| p.profile_type == ProfileType::Restic)
+            .collect()
+    }
+
+    /// Nom de ce serveur dans l'arborescence distante (`storage.server_name`, sinon déduit de
+    /// `storage.remote` : `s3backup:backups/s001/backup` -> `s001`).
+    pub fn current_server_name(&self) -> Option<String> {
+        let storage = self.settings.storage.as_ref()?;
+        if let Some(name) = storage.server_name.as_ref().filter(|n| !n.is_empty()) {
+            return Some(name.clone());
+        }
+        let path = storage.remote.split_once(':').map(|(_, p)| p).unwrap_or(&storage.remote);
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if segments.len() >= 2 {
+            Some(segments[segments.len() - 2].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Transpose une cible distante de CE serveur vers celle d'un autre serveur.
+    ///
+    /// `s3backup:backups/s001/backup` avec `s002` -> `s3backup:backups/s002/backup`.
+    pub fn remote_for_server(&self, remote: &str, server: &str) -> DomainResult<String> {
+        let current = self.current_server_name().ok_or_else(|| {
+            DomainError::Config(
+                "Impossible de déterminer le nom du serveur courant : renseigner \
+                 'settings.storage.server_name' ou utiliser une cible 'remote' de la forme \
+                 <racine>/<serveur>/<dossier>"
+                    .to_string(),
+            )
+        })?;
+        let (prefix, path) = match remote.split_once(':') {
+            Some((p, rest)) => (format!("{}:", p), rest),
+            None => (String::new(), remote),
+        };
+        let mut replaced = false;
+        let segments: Vec<String> = path
+            .split('/')
+            .map(|seg| {
+                if !replaced && seg == current {
+                    replaced = true;
+                    server.to_string()
+                } else {
+                    seg.to_string()
+                }
+            })
+            .collect();
+        if !replaced {
+            return Err(DomainError::Config(format!(
+                "La cible distante '{}' ne contient pas le nom du serveur courant '{}'",
+                remote, current
+            )));
+        }
+        Ok(format!("{}{}", prefix, segments.join("/")))
+    }
+
+    /// Cible distante (CE serveur) où un profil envoie ses sauvegardes de fichiers/dumps.
+    pub fn remote_of_profile(&self, profile: &BackupProfile) -> Option<String> {
+        profile
+            .destination
+            .remote
+            .clone()
+            .or_else(|| self.settings.storage.as_ref().map(|s| s.remote.clone()))
     }
 }

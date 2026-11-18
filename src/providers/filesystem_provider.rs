@@ -221,6 +221,7 @@ impl FilesystemProvider {
             CompressionAlgorithm::Gzip => {
                 let decoder = GzDecoder::new(reader);
                 let mut archive = Archive::new(decoder);
+                Self::preserve_metadata(&mut archive);
                 self.unpack_entries(&mut archive, target_dir, partial_filter)?
             }
             CompressionAlgorithm::Zstd => {
@@ -228,10 +229,12 @@ impl FilesystemProvider {
                     DomainError::Storage(format!("Échec initialisation décompresseur ZSTD : {}", e))
                 })?;
                 let mut archive = Archive::new(decoder);
+                Self::preserve_metadata(&mut archive);
                 self.unpack_entries(&mut archive, target_dir, partial_filter)?
             }
             CompressionAlgorithm::None => {
                 let mut archive = Archive::new(reader);
+                Self::preserve_metadata(&mut archive);
                 self.unpack_entries(&mut archive, target_dir, partial_filter)?
             }
         };
@@ -241,6 +244,21 @@ impl FilesystemProvider {
             extracted_count
         );
         Ok(extracted_count)
+    }
+
+    /// Conserve les permissions et, en tant que root, les propriétaires (uid/gid) d'origine :
+    /// indispensable pour des fichiers uploadés lus par un utilisateur applicatif (www-data...).
+    fn preserve_metadata<R: Read>(archive: &mut Archive<R>) {
+        archive.set_preserve_permissions(true);
+        if Self::running_as_root() {
+            archive.set_preserve_ownerships(true);
+        }
+    }
+
+    /// Vrai si le processus courant s'exécute avec les droits root (Linux).
+    fn running_as_root() -> bool {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata("/proc/self").map(|m| m.uid() == 0).unwrap_or(false)
     }
 
     /// Dépaquette les entrées en appliquant le filtre partiel et la sécurité anti-zip-slip.
@@ -268,6 +286,18 @@ impl FilesystemProvider {
                 .to_path_buf();
 
             let path_str = entry_path.to_string_lossy().to_string();
+
+            // Une archive téléchargée n'est pas de confiance : aucun « .. » n'est toléré
+            // (la comparaison lexicale ci-dessous ne suffit pas avec une cible « / »).
+            if entry_path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(DomainError::Integrity {
+                    resource: path_str,
+                    message: "Chemin contenant '..' refusé dans l'archive".to_string(),
+                });
+            }
 
             if let Some(filter) = partial_filter {
                 let filter_clean = filter.trim_start_matches('/');

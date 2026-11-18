@@ -7,13 +7,14 @@ use crate::actions::history_action::HistoryAction;
 use crate::actions::restore_action::RestoreAction;
 use crate::actions::retention_action::RetentionAction;
 use crate::actions::scheduler_action::SchedulerAction;
+use crate::actions::server_restore_action::{parse_before, ServerRestoreAction, ServerRestoreOptions};
 use crate::actions::validation_action::{ValidateConfigAction, VerifyBackupAction};
 use crate::cli::args::{
     BackupSubcommands, Commands, ConfigSubcommands, RestoreSubcommands,
     RetentionSubcommands, SchedulerSubcommands,
 };
 use crate::core::abstract_traits::{CommandExecutor, LockService, NotificationService, StorageEngine};
-use crate::core::exceptions::DomainResult;
+use crate::core::exceptions::{DomainError, DomainResult};
 use crate::providers::restic_provider::ResticProvider;
 
 /// Aiguilleur central exécutant les commandes demandées.
@@ -180,14 +181,21 @@ impl<'a> CommandDispatcher<'a> {
                 }
             },
             Commands::Restore(args) => match args.command {
-                RestoreSubcommands::Run {
+                Some(RestoreSubcommands::List { server }) => {
+                    let config = ValidateConfigAction::execute(default_config)?;
+                    let listing =
+                        ServerRestoreAction::new(self.executor, self.storage).list(&config, &server)?;
+                    println!("{}", listing.render());
+                    Ok(())
+                }
+                Some(RestoreSubcommands::Run {
                     backup_id,
                     config: opt_cfg,
                     target,
                     dest_db,
                     partial,
                     force,
-                } => {
+                }) => {
                     let path = self.resolve_config_path(default_config, opt_cfg.as_ref());
                     let config = ValidateConfigAction::execute(path)?;
                     let action = RestoreAction::new(self.executor, self.storage);
@@ -201,6 +209,41 @@ impl<'a> CommandDispatcher<'a> {
                     )?;
                     println!("Restauration réussie pour '{}'", backup_id);
                     Ok(())
+                }
+                None => {
+                    let server = args.server.ok_or_else(|| {
+                        DomainError::Config(
+                            "Usage : restore --server <serveur> --application <nom|all> (ou : restore run <id>, restore list --server <serveur>)".to_string(),
+                        )
+                    })?;
+                    let application = args.application.ok_or_else(|| {
+                        DomainError::Config("--application <nom|all> est requis avec --server".to_string())
+                    })?;
+                    let before = args.before.as_deref().map(parse_before).transpose()?;
+                    let config = ValidateConfigAction::execute(default_config)?;
+                    let options = ServerRestoreOptions {
+                        server,
+                        application,
+                        before,
+                        dry_run: args.dry_run,
+                        force: args.force,
+                        start: args.start,
+                        include_system: args.include_system,
+                        work_dir: args.work_dir,
+                        keep_downloads: args.keep_downloads,
+                    };
+                    let report = ServerRestoreAction::new(self.executor, self.storage)
+                        .execute(&config, &options)?;
+                    println!("{}", report.render());
+                    if report.failed() > 0 {
+                        Err(DomainError::Execution {
+                            command: "restore".to_string(),
+                            message: format!("{} étape(s) de restauration en échec", report.failed()),
+                            exit_code: Some(1),
+                        })
+                    } else {
+                        Ok(())
+                    }
                 }
             },
             Commands::Retention(args) => match args.command {

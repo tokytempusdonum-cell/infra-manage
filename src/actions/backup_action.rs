@@ -12,12 +12,20 @@ use crate::core::abstract_traits::{CommandExecutor, LockService, NotificationSer
 use crate::core::exceptions::{DomainError, DomainResult};
 use crate::core::model::{
     AppConfig, BackupMetadata, BackupProfile, BackupStatus, CompressionAlgorithm, ProfileType,
+    BackupReport, ProfileReport,
 };
 use crate::providers::database_provider::DatabaseProvider;
 use crate::providers::docker_provider::DockerProvider;
 use crate::providers::filesystem_provider::FilesystemProvider;
 use crate::providers::restic_provider::ResticProvider;
 use crate::providers::stream_compression::compress_file;
+
+/// Résultat d'exécution d'un profil, remonté dans le bilan de notification.
+#[derive(Debug, Default)]
+struct ProfileOutcome {
+    size_bytes: Option<u64>,
+    detail: Option<String>,
+}
 
 /// Action d'exécution d'un cycle de sauvegarde complet ou ciblé.
 pub struct BackupAction<'a> {
@@ -52,6 +60,9 @@ impl<'a> BackupAction<'a> {
     ) -> DomainResult<usize> {
         info!("[LOG ACTION] === Début du cycle de sauvegarde ===");
 
+        let cycle_start = Instant::now();
+        let started_at = Utc::now();
+        let mut reports: Vec<ProfileReport> = Vec::new();
         let mut successful = 0;
         let mut failed = 0;
 
@@ -74,6 +85,7 @@ impl<'a> BackupAction<'a> {
 
         for profile in &profiles_to_run {
             info!("[LOG ACTION] Lancement du profil : '{}'", profile.name);
+            let profile_start = Instant::now();
 
             // Verrou propre au profil : un même profil ne peut pas tourner deux fois en même temps,
             // mais des profils différents peuvent s'exécuter en parallèle (processus distincts).
@@ -88,15 +100,34 @@ impl<'a> BackupAction<'a> {
                             profile.name, e
                         );
                         failed += 1;
+                        reports.push(ProfileReport {
+                            name: profile.name.clone(),
+                            profile_type: profile.profile_type,
+                            status: BackupStatus::Failed,
+                            size_bytes: None,
+                            duration_seconds: profile_start.elapsed().as_secs_f64(),
+                            detail: Some(format!(
+                                "ce profil est déjà en cours d'exécution (verrou occupé) : {}",
+                                e
+                            )),
+                        });
                         continue;
                     }
                 }
             };
 
             match self.execute_profile(config, profile, dry_run) {
-                Ok(()) => {
+                Ok(outcome) => {
                     info!("[LOG ACTION] OK : Profil '{}' terminé avec succès", profile.name);
                     successful += 1;
+                    reports.push(ProfileReport {
+                        name: profile.name.clone(),
+                        profile_type: profile.profile_type,
+                        status: BackupStatus::Success,
+                        size_bytes: outcome.size_bytes,
+                        duration_seconds: profile_start.elapsed().as_secs_f64(),
+                        detail: outcome.detail,
+                    });
                 }
                 Err(e) => {
                     error!(
@@ -104,6 +135,14 @@ impl<'a> BackupAction<'a> {
                         profile.name, e
                     );
                     failed += 1;
+                    reports.push(ProfileReport {
+                        name: profile.name.clone(),
+                        profile_type: profile.profile_type,
+                        status: BackupStatus::Failed,
+                        size_bytes: None,
+                        duration_seconds: profile_start.elapsed().as_secs_f64(),
+                        detail: Some(e.to_string()),
+                    });
                 }
             }
         }
@@ -116,10 +155,21 @@ impl<'a> BackupAction<'a> {
 
         if failed == 0 {
             info!("[LOG ACTION] === {} ===", summary);
-            let _ = self.notifier.notify(&format!("Outil Sauvegarde : {}", summary));
         } else {
             error!("[LOG ACTION] === {} ===", summary);
-            let _ = self.notifier.notify(&format!("ATTENTION - Outil Sauvegarde : {}", summary));
+        }
+
+        // Bilan détaillé (total, réussies, échecs, détail par profil) — pas en simulation.
+        if !dry_run {
+            let report = BackupReport {
+                hostname: local_hostname(),
+                started_at,
+                duration_seconds: cycle_start.elapsed().as_secs_f64(),
+                profiles: reports,
+            };
+            if let Err(e) = self.notifier.notify_report(&report) {
+                warn!("[LOG ACTION] Notification non envoyée : {}", e);
+            }
         }
 
         if failed > 0 {
@@ -139,7 +189,7 @@ impl<'a> BackupAction<'a> {
         config: &AppConfig,
         profile: &BackupProfile,
         dry_run: bool,
-    ) -> DomainResult<()> {
+    ) -> DomainResult<ProfileOutcome> {
         let start_time = Instant::now();
         let base_dir = config.resolve_backup_dir(profile);
         fs::create_dir_all(base_dir)?;
@@ -152,7 +202,7 @@ impl<'a> BackupAction<'a> {
                 "[LOG ACTION] [SIMULATION] Sauvegarde simulée pour '{}' (id: {})",
                 profile.name, backup_id
             );
-            return Ok(());
+            return Ok(ProfileOutcome::default());
         }
 
         // 1. Exécution des pré-commandes éventuelles
@@ -243,13 +293,16 @@ impl<'a> BackupAction<'a> {
                     .settings
                     .storage
                     .as_ref()
-                    .and_then(|s| s.extra_args.clone())
+                    .map(|s| s.rclone_args())
                     .unwrap_or_default();
                 self.storage
                     .upload_to_remote(base_dir, remote, is_sync, timeout, &extra)?;
             }
 
-            return Ok(());
+            return Ok(ProfileOutcome {
+                size_bytes: None,
+                detail: Some("snapshot restic créé".to_string()),
+            });
         }
 
         let file_name = format!("{}.{}", backup_id, extension);
@@ -368,7 +421,7 @@ impl<'a> BackupAction<'a> {
 
             let remote_file = format!("{}/{}", remote_dest, file_name);
             let timeout = &storage_cfg.upload_max_duration;
-            let extra = storage_cfg.extra_args.clone().unwrap_or_default();
+            let extra = storage_cfg.rclone_args();
 
             if let Err(e) = self
                 .storage
@@ -388,6 +441,19 @@ impl<'a> BackupAction<'a> {
             }
         }
 
-        Ok(())
+        Ok(ProfileOutcome {
+            size_bytes: Some(file_size),
+            detail: None,
+        })
     }
+}
+
+/// Nom de la machine locale (pour identifier le serveur dans les notifications).
+fn local_hostname() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok().filter(|h| !h.is_empty()))
+        .unwrap_or_else(|| "serveur inconnu".to_string())
 }

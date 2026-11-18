@@ -59,6 +59,7 @@ impl TestEnvironment {
                 lock_file: self.temp_dir.path().join("backup.lock"),
                 notifications: None,
                 storage: None,
+                applications_root: PathBuf::from("/opt"),
             },
             profiles: vec![
                 BackupProfile {
@@ -79,6 +80,7 @@ impl TestEnvironment {
                         ..Default::default()
                     }),
                     validation: Some(ValidationConfig::default()),
+                    application: None,
                 },
                 BackupProfile {
                     name: "ghost".to_string(),
@@ -102,6 +104,7 @@ impl TestEnvironment {
                         ..Default::default()
                     }),
                     validation: Some(ValidationConfig::default()),
+                    application: None,
                 },
                 BackupProfile {
                     name: "configs".to_string(),
@@ -124,6 +127,7 @@ impl TestEnvironment {
                         ..Default::default()
                     }),
                     validation: Some(ValidationConfig::default()),
+                    application: None,
                 },
             ],
         }

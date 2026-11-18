@@ -12,10 +12,17 @@ settings:
     enabled: true
     slack_webhook_env: SLACK_WEBHOOK_URL
 
+  # Dossier racine des applications : l'application « authentik » vit dans /opt/authentik.
+  # Sert à restaurer la configuration (docker-compose, .env) avec `restore --application`.
+  applications_root: /opt
+
   storage:
     rclone_config: /root/.config/rclone/rclone.conf
+    # Convention : <racine>/<serveur>/<dossier>. Le nom du serveur (ici s001) est déduit de
+    # 'remote' ; `restore --server s002` lit les mêmes dossiers sous backups/s002/.
     remote: s3backup:backups/s001/backup
     config_remote: s3backup:backups/s001/backup-configuration
+    # server_name: s001   # à renseigner seulement si la déduction ci-dessus est fausse
     upload_max_duration: 6h
     config_max_duration: 12h
 
@@ -45,6 +52,28 @@ profiles:
       algorithm: gzip
     retention:
       days: 14
+
+  # Fichiers uploadés de l'application « ghost » (dossiers de volumes exclus du profil `configs`).
+  # `application: ghost` les rattache à la base « ghost » : `restore --application ghost`
+  # restaure la configuration, ces fichiers puis la base, ensemble.
+  # Les chemins sont archivés en absolu et restaurés à leur emplacement d'origine
+  # (propriétaires et permissions conservés quand la restauration est lancée en root).
+  # - name: ghost-uploads
+  #   type: filesystem
+  #   application: ghost
+  #   enabled: true
+  #   schedule: "30 0 * * *"
+  #   source:
+  #     paths:
+  #       - /opt/ghost/volumes/content
+  #     exclude:
+  #       - "*.part"
+  #       - "*/cache/*"
+  #   compression:
+  #     enabled: true
+  #     algorithm: zstd
+  #   retention:
+  #     days: 14
 
   - name: jms
     type: postgres
@@ -123,6 +152,9 @@ profiles:
       exclude:
         - "*.part"
     destination:
+      # Indispensable : sans 'path', le dossier synchronisé vers S3 est /backup (les dumps)
+      # et non le dépôt restic, qui ne serait alors jamais envoyé.
+      path: /backup-configuration
       remote: s3backup:backups/s001/backup-configuration
       remote_sync: true
     retention:

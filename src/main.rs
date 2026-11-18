@@ -40,7 +40,7 @@ fn main() {
     let executor = SystemCommandExecutor::new();
     let storage = DiskStorageEngine::new(&executor);
     let lock_service = SystemLockService::new();
-    let notifier = WebhookNotificationService::new(notif_cfg, &executor);
+    let notifier = WebhookNotificationService::new(notif_cfg);
 
     let dispatcher = CommandDispatcher::new(&executor, &storage, &lock_service, &notifier);
 

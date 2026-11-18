@@ -56,6 +56,7 @@ fn test_duplicate_profile_names_rejected() {
         compression: None,
         retention: None,
         validation: None,
+        application: None,
     });
     env.write_config_yaml(&config);
 

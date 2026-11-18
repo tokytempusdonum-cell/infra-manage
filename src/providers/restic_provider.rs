@@ -1,6 +1,7 @@
 //! Adaptateur pour les opérations de sauvegarde incrémentale et dédupliquée avec Restic.
 
 use std::path::Path;
+use chrono::{DateTime, Utc};
 use tracing::{debug, info};
 
 use crate::core::abstract_traits::CommandExecutor;
@@ -273,6 +274,21 @@ impl<'a> ResticProvider<'a> {
         snapshot_id: &str,
         target_dir: &Path,
     ) -> DomainResult<()> {
+        self.restore_filtered(profile, snapshot_id, target_dir, &[])
+    }
+
+    /// Restaure un snapshot Restic en ne gardant que les chemins `includes` (tout si vide).
+    ///
+    /// Les chemins sont ceux enregistrés dans le snapshot (absolus, ex: `/opt/authentik`) ;
+    /// avec `--target /` ils sont restaurés à leur emplacement d'origine, propriétaires
+    /// et permissions compris.
+    pub fn restore_filtered(
+        &self,
+        profile: &BackupProfile,
+        snapshot_id: &str,
+        target_dir: &Path,
+        includes: &[String],
+    ) -> DomainResult<()> {
         let envs_owned = self.build_envs(profile)?;
         let envs_ref: Vec<(&str, &str)> = envs_owned
             .iter()
@@ -280,11 +296,17 @@ impl<'a> ResticProvider<'a> {
             .collect();
 
         let target_str = target_dir.to_string_lossy().to_string();
-        let args = ["restore", snapshot_id, "--target", &target_str];
+        let mut args: Vec<&str> = vec!["restore", snapshot_id, "--target", &target_str];
+        for inc in includes {
+            args.push("--include");
+            args.push(inc.as_str());
+        }
 
         info!(
-            "[LOG RESTIC] Restauration du snapshot Restic '{}' vers {:?}",
-            snapshot_id, target_dir
+            "[LOG RESTIC] Restauration du snapshot Restic '{}' vers {:?} ({} filtre(s))",
+            snapshot_id,
+            target_dir,
+            includes.len()
         );
         let output = self.executor.execute("restic", &args, &envs_ref)?;
 
@@ -298,5 +320,108 @@ impl<'a> ResticProvider<'a> {
 
         info!("[LOG RESTIC] Restauration Restic réussie.");
         Ok(())
+    }
+
+    /// Liste les snapshots du dépôt (identifiant complet et date), du plus ancien au plus récent.
+    pub fn list_snapshots(&self, profile: &BackupProfile) -> DomainResult<Vec<(String, DateTime<Utc>)>> {
+        let envs_owned = self.build_envs(profile)?;
+        let envs_ref: Vec<(&str, &str)> = envs_owned
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let output = self
+            .executor
+            .execute("restic", &["snapshots", "--json"], &envs_ref)?;
+        if !output.success {
+            return Err(DomainError::Execution {
+                command: "restic snapshots".to_string(),
+                message: format!("Échec de restic snapshots : {}", output.stderr),
+                exit_code: Some(output.exit_code),
+            });
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(output.stdout.trim()).map_err(|e| {
+            DomainError::Storage(format!("Sortie 'restic snapshots --json' illisible : {}", e))
+        })?;
+        let mut snapshots: Vec<(String, DateTime<Utc>)> = parsed
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|item| {
+                        let id = item.get("id")?.as_str()?.to_string();
+                        let time = item.get("time")?.as_str()?;
+                        let time = DateTime::parse_from_rfc3339(time).ok()?.with_timezone(&Utc);
+                        Some((id, time))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        snapshots.sort_by_key(|(_, t)| *t);
+        Ok(snapshots)
+    }
+
+    /// Choisit le snapshot à restaurer : `latest`, ou le plus récent antérieur à `before`.
+    pub fn pick_snapshot(
+        &self,
+        profile: &BackupProfile,
+        before: Option<DateTime<Utc>>,
+    ) -> DomainResult<String> {
+        let Some(limit) = before else {
+            return Ok("latest".to_string());
+        };
+        self.list_snapshots(profile)?
+            .into_iter()
+            .rev()
+            .find(|(_, t)| *t <= limit)
+            .map(|(id, _)| id)
+            .ok_or_else(|| {
+                DomainError::Storage(format!(
+                    "Aucun snapshot restic antérieur à {}",
+                    limit.format("%Y-%m-%d %H:%M:%S UTC")
+                ))
+            })
+    }
+
+    /// Liste les dossiers situés directement sous `root` dans un snapshot (ex: `/opt/*`).
+    pub fn list_child_dirs(
+        &self,
+        profile: &BackupProfile,
+        snapshot_id: &str,
+        root: &str,
+    ) -> DomainResult<Vec<String>> {
+        let envs_owned = self.build_envs(profile)?;
+        let envs_ref: Vec<(&str, &str)> = envs_owned
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let output = self
+            .executor
+            .execute("restic", &["ls", snapshot_id, root, "--json"], &envs_ref)?;
+        if !output.success {
+            return Err(DomainError::Execution {
+                command: "restic ls".to_string(),
+                message: format!("Échec de restic ls : {}", output.stderr),
+                exit_code: Some(output.exit_code),
+            });
+        }
+
+        let root_trimmed = root.trim_end_matches('/');
+        let mut dirs: Vec<String> = output
+            .stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("dir"))
+            .filter_map(|v| v.get("path").and_then(|p| p.as_str()).map(|p| p.to_string()))
+            .filter(|path| {
+                path.strip_prefix(root_trimmed)
+                    .map(|rest| rest.starts_with('/') && !rest[1..].is_empty() && !rest[1..].contains('/'))
+                    .unwrap_or(false)
+            })
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+        Ok(dirs)
     }
 }

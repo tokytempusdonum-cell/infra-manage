@@ -24,6 +24,7 @@ fn profile(name: &str, kind: ProfileType, source: SourceConfig) -> BackupProfile
         compression: None,
         retention: None,
         validation: Some(ValidationConfig::default()),
+        application: None,
     }
 }
 

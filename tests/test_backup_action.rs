@@ -42,7 +42,8 @@ fn test_backup_postgres_nominal_flow() {
     // Vérification des notifications
     let notifs = env.notifier.get_messages();
     assert_eq!(notifs.len(), 1);
-    assert!(notifs[0].contains("1/1 réussi(s)"));
+    assert!(notifs[0].contains("1/1 profil sauvegardé"), "message inattendu : {}", notifs[0]);
+    assert!(notifs[0].contains("Total : 1 · Réussies : 1 · Échecs : 0"));
 }
 
 #[test]
