@@ -1,4 +1,4 @@
-//! Point d'entrée exécutable de l'application CLI backup-cli.
+//! Point d'entrée exécutable de l'application CLI infra-manage.
 
 use std::process;
 use clap::Parser;

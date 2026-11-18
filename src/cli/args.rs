@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
-/// backup-cli : Outil moderne, robuste et modulaire de gestion des sauvegardes et restaurations.
+/// infra-manage : Outil moderne, robuste et modulaire de gestion des sauvegardes et restaurations.
 #[derive(Debug, Parser)]
-#[command(name = "backup-cli", version, about, long_about = None)]
+#[command(name = "infra-manage", version, about, long_about = None)]
 pub struct Cli {
     /// Fichier de configuration YAML par défaut.
     #[arg(short, long, global = true, default_value = "backup.yml")]
@@ -117,7 +117,7 @@ pub enum BackupSubcommands {
 /// Groupe de commandes pour `restore`.
 ///
 /// Sans sous-commande, restaure des applications d'un serveur depuis S3 vers cette machine :
-/// `backup-cli restore --server s001 --application authentik` (ou `--application all`).
+/// `infra-manage restore --server s001 --application authentik` (ou `--application all`).
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct RestoreCommandGroup {
@@ -250,7 +250,7 @@ pub enum SchedulerSubcommands {
         #[arg(short, long)]
         config: Option<PathBuf>,
 
-        /// Chemin absolu du binaire backup-cli utilisé dans la crontab.
+        /// Chemin absolu du binaire infra-manage utilisé dans la crontab.
         #[arg(long)]
         binary_path: Option<String>,
     },

@@ -1,12 +1,12 @@
 [package]
-name = "backup-cli"
+name = "infra-manage"
 version = "0.1.0"
 edition = "2021"
 authors = ["Tempus Team"]
 description = "A robust, modular and scalable backup and restore CLI application"
 
 [[bin]]
-name = "backup-cli"
+name = "infra-manage"
 path = "src/main.rs"
 
 [lib]

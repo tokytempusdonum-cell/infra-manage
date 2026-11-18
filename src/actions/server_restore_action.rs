@@ -2,7 +2,7 @@
 //! stockées sur S3, vers la machine courante.
 //!
 //! Cas d'usage : un serveur (ex: `s001`) tombe ; sur une machine de remplacement on lance
-//! `backup-cli restore --server s001 --application authentik` (ou `all`).
+//! `infra-manage restore --server s001 --application authentik` (ou `all`).
 //!
 //! Pour chaque application :
 //! 1. configuration (`docker-compose`, `.env`...) depuis le dépôt restic du serveur d'origine ;

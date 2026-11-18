@@ -16,11 +16,11 @@ impl SchedulerAction {
         config_path: &Path,
         binary_path: Option<&str>,
     ) -> DomainResult<String> {
-        let bin = binary_path.unwrap_or("backup-cli");
+        let bin = binary_path.unwrap_or("infra-manage");
         let cfg_str = config_path.to_string_lossy();
 
         let mut lines = Vec::new();
-        lines.push("# === backup-cli planificateur automatique ===".to_string());
+        lines.push("# === infra-manage planificateur automatique ===".to_string());
         lines.push(format!(
             "# Fichier de configuration : {}",
             cfg_str

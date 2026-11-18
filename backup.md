@@ -2,7 +2,7 @@ Voici comment sauvegarder, en pratique. Les commandes ci-dessous ont été essay
 
 **1. Avant la première sauvegarde**
 
-- Installe `backup-cli`, `rclone`, `restic` et `docker` sur le serveur.
+- Installe `infra-manage`, `rclone`, `restic` et `docker` sur le serveur.
 - Prépare ton fichier de configuration, par exemple `/root/backup-script/backup.yml`.
 - Vérifie que la config rclone existe (`rclone_config`) et que le fichier du mot de passe restic existe (`restic_password_file`).
 - Exporte les variables des mots de passe de bases (`GHOST_DB_PASSWORD`, etc.), celles que tu as mises dans `password_env`.
@@ -17,10 +17,10 @@ Voici comment sauvegarder, en pratique. Les commandes ci-dessous ont été essay
 **3. Lancer à la main**
 
 ```
-backup-cli -c /root/backup-script/backup.yml config validate -f /root/backup-script/backup.yml
-backup-cli -c /root/backup-script/backup.yml backup run --dry-run
-backup-cli -c /root/backup-script/backup.yml backup run
-backup-cli -c /root/backup-script/backup.yml backup run --profile ghost
+infra-manage -c /root/backup-script/backup.yml config validate -f /root/backup-script/backup.yml
+infra-manage -c /root/backup-script/backup.yml backup run --dry-run
+infra-manage -c /root/backup-script/backup.yml backup run
+infra-manage -c /root/backup-script/backup.yml backup run --profile ghost
 ```
 
 - `config validate` contrôle le fichier.
@@ -30,10 +30,10 @@ backup-cli -c /root/backup-script/backup.yml backup run --profile ghost
 **4. Vérifier**
 
 ```
-backup-cli -c /root/backup-script/backup.yml backup list
-backup-cli -c /root/backup-script/backup.yml backup list --profile ghost
-backup-cli -c /root/backup-script/backup.yml backup info <id>
-backup-cli -c /root/backup-script/backup.yml backup verify <id>
+infra-manage -c /root/backup-script/backup.yml backup list
+infra-manage -c /root/backup-script/backup.yml backup list --profile ghost
+infra-manage -c /root/backup-script/backup.yml backup info <id>
+infra-manage -c /root/backup-script/backup.yml backup verify <id>
 rclone lsf s3backup:backups/s001/backup
 rclone lsf s3backup:backups/s001/backup-configuration
 ```
@@ -44,14 +44,14 @@ rclone lsf s3backup:backups/s001/backup-configuration
 **5. Automatiser**
 
 ```
-backup-cli -c /root/backup-script/backup.yml scheduler crontab --binary-path /usr/local/bin/backup-cli
+infra-manage -c /root/backup-script/backup.yml scheduler crontab --binary-path /usr/local/bin/infra-manage
 ```
 
 Cette commande affiche seulement les lignes de cron, elle n'écrit rien. Pour les installer :
 
 ```
 crontab -l > /root/crontab.bak
-(crontab -l 2>/dev/null; backup-cli -c /root/backup-script/backup.yml scheduler crontab --binary-path /usr/local/bin/backup-cli) | crontab -
+(crontab -l 2>/dev/null; infra-manage -c /root/backup-script/backup.yml scheduler crontab --binary-path /usr/local/bin/infra-manage) | crontab -
 crontab -l
 ```
 

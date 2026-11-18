@@ -1,4 +1,4 @@
-//! Bibliothèque principale de l'application backup-cli.
+//! Bibliothèque principale de l'application infra-manage.
 //!
 //! Conçue selon une architecture hexagonale (ports et adaptateurs) :
 //! - `core` : modèles de données et interfaces du domaine.

@@ -5,7 +5,7 @@ rangées par serveur sur S3 (`backups/s001/…`, `backups/s002/…`).
 
 ## Prérequis sur la machine de remplacement
 
-- `backup-cli`, `rclone`, `restic`, `docker` installés.
+- `infra-manage`, `rclone`, `restic`, `docker` installés.
 - Le fichier `backup.yml` **du serveur d'origine** (il contient les profils, conteneurs et mots de
   passe à utiliser). Il est dans les sauvegardes de configuration (`/root/backup-script`).
 - La config rclone (`settings.storage.rclone_config`) et le fichier mot de passe restic
@@ -18,18 +18,18 @@ rangées par serveur sur S3 (`backups/s001/…`, `backups/s002/…`).
 
 ```bash
 # Que contient S3 pour ce serveur ? (dernière sauvegarde de chaque profil)
-backup-cli -c backup.yml restore list --server s001
+infra-manage -c backup.yml restore list --server s001
 
 # Simulation : rien n'est téléchargé ni modifié
-backup-cli -c backup.yml restore --server s001 --application authentik --dry-run
+infra-manage -c backup.yml restore --server s001 --application authentik --dry-run
 
 # Une application, plusieurs, ou toutes
-backup-cli -c backup.yml restore --server s001 --application authentik --start
-backup-cli -c backup.yml restore --server s001 --application authentik,ghost --start
-backup-cli -c backup.yml restore --server s001 --application all --start
+infra-manage -c backup.yml restore --server s001 --application authentik --start
+infra-manage -c backup.yml restore --server s001 --application authentik,ghost --start
+infra-manage -c backup.yml restore --server s001 --application all --start
 
 # État à une date donnée (UTC) : le plus récent antérieur à cette date
-backup-cli -c backup.yml restore --server s001 --application ghost --before 2026-11-12
+infra-manage -c backup.yml restore --server s001 --application ghost --before 2026-11-12
 ```
 
 | Option | Rôle |
